@@ -22,18 +22,18 @@
           </tr>
         </thead>
         <tbody>
-          <tr v-for="solicitud in solicitudes" :key="solicitud.solicitudPrestamoID">
-            <td>{{ solicitud.solicitudPrestamoID }}</td>
-            <td>{{ solicitud.clienteID }}</td>
-            <td>${{ solicitud.montoSolicitado.toFixed(2) }}</td>
-            <td>{{ solicitud.plazoID }}</td>
-            <td>{{ new Date(solicitud.fechaSolicitud).toLocaleDateString() }}</td>
-            <td><span :class="['status', solicitud.estado.toLowerCase()]">{{ solicitud.estado }}</span></td>
+          <tr v-for="solicitud in solicitudes" :key="solicitud.solicitudPrestamoID || solicitud.id">
+            <td>{{ solicitud.solicitudPrestamoID || solicitud.id }}</td>
+            <td>{{ solicitud.clienteID || solicitud.clienteId }}</td>
+            <td>${{ formatCurrency(solicitud.montoSolicitado) }}</td>
+            <td>{{ solicitud.plazoID || solicitud.plazoId }}</td>
+            <td>{{ formatDate(solicitud.fechaSolicitud) }}</td>
+            <td><span :class="['status', (solicitud.estado || '').toLowerCase()]">{{ solicitud.estado || 'N/A' }}</span></td>
             
             <td class="action-buttons">
-              <template v-if="solicitud.estado === 'PENDIENTE'">
-                <button @click="openModal(solicitud.solicitudPrestamoID, 'APROBAR')" class="btn btn-sm btn-success">Aprobar</button>
-                <button @click="openModal(solicitud.solicitudPrestamoID, 'RECHAZAR')" class="btn btn-sm btn-danger">Rechazar</button>
+              <template v-if="(solicitud.estado || '').toUpperCase() === 'PENDIENTE'">
+                <button @click="openModal(solicitud.solicitudPrestamoID || solicitud.id, 'APROBAR')" class="btn btn-sm btn-success">Aprobar</button>
+                <button @click="openModal(solicitud.solicitudPrestamoID || solicitud.id, 'RECHAZAR')" class="btn btn-sm btn-danger">Rechazar</button>
               </template>
               <span v-else>Gestionada</span>
             </td>
@@ -109,12 +109,46 @@ async function loadSolicitudes(newPage = 1) {
   message.value = ''; // Limpia mensajes al cambiar de página
   try {
     const response = await SolicitudService.getAllSolicitudes(page.value, size.value);
-    solicitudes.value = response.data.content; 
-    totalPages.value = response.data.totalPages;
+    
+    // Manejar diferentes estructuras de respuesta
+    if (response && response.data) {
+      // Si la respuesta tiene estructura de paginación (Spring Data)
+      if (response.data.content) {
+        solicitudes.value = response.data.content || [];
+        totalPages.value = response.data.totalPages || 1;
+      } 
+      // Si la respuesta es un array directo
+      else if (Array.isArray(response.data)) {
+        solicitudes.value = response.data;
+        totalPages.value = 1;
+      }
+      // Si no hay datos
+      else {
+        solicitudes.value = [];
+        totalPages.value = 1;
+      }
+    } else {
+      solicitudes.value = [];
+      totalPages.value = 1;
+    }
   } catch (error) {
     console.error("Error al cargar solicitudes:", error);
-    showMessage('Error al cargar la lista de solicitudes.', 'error');
+    console.error("Detalles del error:", error.response || error.message);
+    
+    // Asegurar que siempre se muestre el estado correcto
+    solicitudes.value = [];
+    totalPages.value = 1;
+    
+    // Mostrar mensaje de error más específico
+    let errorMessage = 'Error al cargar la lista de solicitudes.';
+    if (error.response) {
+      errorMessage += ` (${error.response.status}: ${error.response.statusText})`;
+    } else if (error.message) {
+      errorMessage += ` (${error.message})`;
+    }
+    showMessage(errorMessage, 'error');
   } finally {
+    // Asegurar que siempre se desactive el estado de carga
     isLoading.value = false;
   }
 }
@@ -165,6 +199,21 @@ async function submitGestion() {
         console.error("Error al gestionar solicitud:", error.response || error);
         showMessage('Error al gestionar. Estado inválido o recurso no encontrado.', 'error');
     }
+}
+
+// --- Métodos de Utilidad ---
+function formatCurrency(value) {
+  if (!value && value !== 0) return '0.00';
+  return parseFloat(value).toFixed(2);
+}
+
+function formatDate(dateString) {
+  if (!dateString) return 'N/A';
+  try {
+    return new Date(dateString).toLocaleDateString();
+  } catch (e) {
+    return 'N/A';
+  }
 }
 
 function showMessage(msg, type) {
