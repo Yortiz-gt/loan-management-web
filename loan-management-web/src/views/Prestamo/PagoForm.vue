@@ -7,11 +7,11 @@
       <div class="info-grid">
         <div class="info-item">
           <label>Monto Total:</label>
-          <span>${{ formatCurrency(prestamoInfo.montoTotal || prestamoInfo.monto) }}</span>
+          <span>${{ formatCurrency(prestamoInfo.montoPrincipal + (prestamoInfo.montoPrincipal * prestamoInfo.plazoMeses * prestamoInfo.tasaInteres)) }}</span>
         </div>
         <div class="info-item">
           <label>Monto Pagado:</label>
-          <span>${{ formatCurrency(prestamoInfo.montoPagado || prestamoInfo.pagado || 0) }}</span>
+          <span>${{ formatCurrency(montoPagado) }}</span>
         </div>
         <div class="info-item">
           <label>Saldo Pendiente:</label>
@@ -21,14 +21,14 @@
     </div>
 
     <form @submit.prevent="submitPago" class="pago-form">
-      
+
       <div class="form-group">
         <label for="montoPago">Monto del Pago:</label>
-        <input 
-          type="number" 
-          id="montoPago" 
-          v-model.number="pagoData.montoPago" 
-          step="0.01" 
+        <input
+          type="number"
+          id="montoPago"
+          v-model.number="pagoData.montoPago"
+          step="0.01"
           min="0.01"
           :max="calculateSaldo()"
           required>
@@ -37,13 +37,13 @@
 
       <div class="form-group">
         <label for="fechaPago">Fecha del Pago:</label>
-        <input 
-          type="date" 
-          id="fechaPago" 
-          v-model="pagoData.fechaPago" 
+        <input
+          type="date"
+          id="fechaPago"
+          v-model="pagoData.fechaPago"
           required>
       </div>
-      
+
       <div class="form-actions full-width">
         <button type="submit" class="btn-primary" :disabled="calculateSaldo() <= 0">
           Registrar Pago
@@ -53,7 +53,7 @@
         </button>
       </div>
     </form>
-    
+
     <p v-if="message" :class="messageType">{{ message }}</p>
 
   </div>
@@ -66,17 +66,19 @@ import PrestamoService from '@/services/PrestamoService';
 
 // Define las props que espera el componente (el 'id' viene de la ruta)
 const props = defineProps({
-  id: [String, Number] 
+  id: [String, Number]
 });
 
 // Hook para acceder a la navegación (redirecciones)
-const router = useRouter(); 
+const router = useRouter();
 
 // ID del préstamo
 const prestamoId = computed(() => props.id);
 
 // Información del préstamo
 const prestamoInfo = ref(null);
+const pagoTotal = ref(0);
+const montoPagado = ref(0);
 const isLoadingPrestamo = ref(false);
 
 // Objeto reactivo para enlazar a los inputs del formulario
@@ -106,10 +108,16 @@ async function loadPrestamoInfo() {
   isLoadingPrestamo.value = true;
   try {
     const response = await PrestamoService.getPrestamoById(prestamoId.value);
-    
+    console.log(response);
     if (response && response.data) {
       prestamoInfo.value = response.data;
-      
+
+      const totalPagadoResponse = await PrestamoService.getPagoTotalByPrestamo(prestamoId.value);
+      if (totalPagadoResponse && totalPagadoResponse.data !== undefined) {
+        montoPagado.value = totalPagadoResponse.data; // Asigna el valor a tu variable reactiva
+      } else {
+        montoPagado.value = 0; // Si no hay datos, inicializa en 0
+      }
       // Validar que el préstamo tenga saldo pendiente
       if (calculateSaldo() <= 0) {
         showMessage('Este préstamo ya está completamente pagado.', 'error');
@@ -120,7 +128,7 @@ async function loadPrestamoInfo() {
   } catch (error) {
     console.error("Error al cargar información del préstamo:", error);
     console.error("Detalles del error:", error.response || error.message);
-    
+
     let errorMessage = 'Error al cargar la información del préstamo. Puede que el ID no exista.';
     if (error.response) {
       errorMessage += ` (${error.response.status}: ${error.response.statusText})`;
@@ -128,7 +136,7 @@ async function loadPrestamoInfo() {
       errorMessage += ` (${error.message})`;
     }
     showMessage(errorMessage, 'error');
-    
+
     setTimeout(() => {
       router.push({ name: 'prestamo-list' });
     }, 2000);
@@ -140,21 +148,22 @@ async function loadPrestamoInfo() {
 // Calcular saldo pendiente
 function calculateSaldo() {
   if (!prestamoInfo.value) return 0;
-  const montoTotal = parseFloat(prestamoInfo.value.montoTotal || prestamoInfo.value.monto || 0);
-  const montoPagado = parseFloat(prestamoInfo.value.montoPagado || prestamoInfo.value.pagado || 0);
-  return Math.max(0, montoTotal - montoPagado);
+  const montoTotal = parseFloat(prestamoInfo.value.montoPendiente || prestamoInfo.value.monto);
+  // Assuming pagoTotal is the sum of all payments made
+  const saldo = montoTotal - montoPagado.value;
+  return Math.max(0, saldo);
 }
 
 // Formatear moneda
 function formatCurrency(value) {
-  if (!value && value !== 0) return '0.00';
+  if (value === null || value === undefined) return '0.00';
   return parseFloat(value).toFixed(2);
 }
 
 // Lógica de envío de formulario
 async function submitPago() {
   message.value = ''; // Limpiar mensajes anteriores
-  
+
   // Validación básica
   if (!pagoData.value.montoPago || !pagoData.value.fechaPago) {
     showMessage('Por favor, complete todos los campos.', 'error');
@@ -175,17 +184,24 @@ async function submitPago() {
   }
 
   try {
-    // Llama al endpoint POST /api/prestamos/{id}/pagos
-    const response = await PrestamoService.createPago(prestamoId.value, pagoData.value);
+    // Create a payload object that includes prestamoID for the backend's PagoRequest
+    const payload = {
+      ...pagoData.value, // Spread existing montoPago and fechaPago
+      prestamoID: prestamoId.value // Add prestamoID to the payload for the body
+    };
+
+    // Llama al endpoint POST /api/prestamo-id/{id}/pagos
+    // The first argument is for the URL path variable, the second is the request body
+    const response = await PrestamoService.createPago(prestamoId.value, payload);
     showMessage('Pago registrado exitosamente!', 'success');
-    
+
     // Recargar información del préstamo para actualizar el saldo
     await loadPrestamoInfo();
-    
+
     // Limpiar formulario
     pagoData.value.montoPago = null;
     pagoData.value.fechaPago = new Date().toISOString().split('T')[0];
-    
+
     // Si el préstamo está completamente pagado, redirigir después de un momento
     if (calculateSaldo() <= 0) {
       setTimeout(() => {
