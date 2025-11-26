@@ -2,9 +2,11 @@
   <div class="solicitud-list-container">
     <h2>Gestión de Solicitudes de Préstamo</h2>
     
-    <router-link :to="{ name: 'solicitud-create' }" class="btn btn-primary create-btn">
-      + Crear Nueva Solicitud
-    </router-link>
+    <div class="action-buttons-header">
+      <router-link :to="{ name: 'solicitud-create' }" class="btn btn-primary create-btn">
+        + Crear Nueva Solicitud
+      </router-link>
+    </div>
 
     <p v-if="message" :class="messageType">{{ message }}</p>
 
@@ -12,30 +14,48 @@
       <table class="table">
         <thead>
           <tr>
-            <th>ID</th>
-            <th>Cliente ID</th>
+            <th>ID Préstamo</th>
+            <th>Cliente</th>
             <th>Monto</th>
             <th>Plazo</th>
+            <th>Tasa de Interés</th>
             <th>Fecha Sol.</th>
             <th>Estado</th>
             <th>Acciones</th>
+            <th>Pagos</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="solicitud in solicitudes" :key="solicitud.solicitudPrestamoID || solicitud.id">
-            <td>{{ solicitud.solicitudPrestamoID || solicitud.id }}</td>
-            <td>{{ solicitud.clienteID || solicitud.clienteId }}</td>
+          <tr v-for="solicitud in solicitudes" :key="getSolicitudId(solicitud)">
+            <td>{{ getSolicitudId(solicitud) }}</td>
+            <td>{{ getClienteNombre(solicitud.cliente?.clienteID || solicitud.cliente?.id || solicitud.clienteID || solicitud.clienteId) }}</td>
             <td>${{ formatCurrency(solicitud.montoSolicitado) }}</td>
-            <td>{{ solicitud.plazoID || solicitud.plazoId }}</td>
+            <td>{{ getPlazoMeses(solicitud.tipoPlazo?.plazoID || solicitud.tipoPlazo?.plazoId || solicitud.plazoID || solicitud.plazoId) }}</td>
+            <td>{{ getTasaInteres(solicitud.tipoPlazo?.plazoID || solicitud.tipoPlazo?.plazoId || solicitud.plazoID || solicitud.plazoId) }}</td>
             <td>{{ formatDate(solicitud.fechaSolicitud) }}</td>
-            <td><span :class="['status', (solicitud.estado || '').toLowerCase()]">{{ solicitud.estado || 'N/A' }}</span></td>
+            <td><span :class="['status', (solicitud.estadoSolicitud?.nombreEstado || solicitud.estado || '').toLowerCase()]">{{ solicitud.estadoSolicitud?.nombreEstado || solicitud.estado || 'N/A' }}</span></td>
             
             <td class="action-buttons">
-              <template v-if="(solicitud.estado || '').toUpperCase() === 'PENDIENTE'">
-                <button @click="openModal(solicitud.solicitudPrestamoID || solicitud.id, 'APROBAR')" class="btn btn-sm btn-success">Aprobar</button>
-                <button @click="openModal(solicitud.solicitudPrestamoID || solicitud.id, 'RECHAZAR')" class="btn btn-sm btn-danger">Rechazar</button>
+              <button 
+                @click="openModal(getSolicitudId(solicitud), 'APROBAR')" 
+                class="btn btn-sm btn-success"
+                :disabled="!isEnProceso(solicitud)">
+                Aprobar
+              </button>
+              <button 
+                @click="openModal(getSolicitudId(solicitud), 'RECHAZAR')" 
+                class="btn btn-sm btn-danger"
+                :disabled="!isEnProceso(solicitud)">
+                Rechazar
+              </button>
+              <template v-if="isSolicitudAprobada(solicitud)">
+                <router-link 
+                  :to="{ name: 'pago-create', params: { id: getPrestamoId(solicitud) } }" 
+                  class="btn btn-sm btn-primary">
+                  Registrar Pago
+                </router-link>
               </template>
-              <span v-else>Gestionada</span>
+              <span v-else class="no-prestamo">-</span>
             </td>
           </tr>
         </tbody>
@@ -67,7 +87,7 @@
 
     <div v-if="showModal" class="modal-backdrop">
         <div class="modal">
-            <h3>{{ modalAction === 'APROBAR' ? 'Aprobar' : 'Rechazar' }} Solicitud ID: {{ selectedSolicitudId }}</h3>
+            <h3>{{ modalAction === 'APROBAR' ? 'Aprobar' : 'Rechazar' }} Solicitud ID: {{ selectedSolicitudId || 'N/A' }}</h3>
             <p>Ingrese los detalles de la gestión:</p>
             <textarea v-model="gestionDetalles" rows="3" required></textarea>
             
@@ -85,6 +105,8 @@
 <script setup>
 import { ref, onMounted } from 'vue';
 import SolicitudService from '@/services/SolicitudService';
+import ClienteService from '@/services/ClienteService';
+import PlazoService from '@/services/PlazoService';
 
 // --- Variables Reactivas ---
 const solicitudes = ref([]);
@@ -95,6 +117,12 @@ const isLoading = ref(false);
 
 const message = ref('');
 const messageType = ref('');
+
+// Cache de clientes y plazos para evitar múltiples llamadas
+const clientesCache = ref({});
+const plazosCache = ref({});
+const isLoadingClientes = ref(false);
+const isLoadingPlazos = ref(false);
 
 // Variables para el Modal de Gestión
 const showModal = ref(false);
@@ -111,26 +139,33 @@ async function loadSolicitudes(newPage = 1) {
     const response = await SolicitudService.getAllSolicitudes(page.value, size.value);
     
     // Manejar diferentes estructuras de respuesta
+    let solicitudesData = [];
     if (response && response.data) {
       // Si la respuesta tiene estructura de paginación (Spring Data)
       if (response.data.content) {
-        solicitudes.value = response.data.content || [];
+        solicitudesData = response.data.content || [];
         totalPages.value = response.data.totalPages || 1;
       } 
       // Si la respuesta es un array directo
       else if (Array.isArray(response.data)) {
-        solicitudes.value = response.data;
+        solicitudesData = response.data;
         totalPages.value = 1;
       }
       // Si no hay datos
       else {
-        solicitudes.value = [];
+        solicitudesData = [];
         totalPages.value = 1;
       }
     } else {
-      solicitudes.value = [];
+      solicitudesData = [];
       totalPages.value = 1;
     }
+    
+    solicitudes.value = solicitudesData;
+    
+    // Cargar datos faltantes de clientes y plazos
+    await loadMissingData(solicitudesData);
+    
   } catch (error) {
     console.error("Error al cargar solicitudes:", error);
     console.error("Detalles del error:", error.response || error.message);
@@ -153,8 +188,75 @@ async function loadSolicitudes(newPage = 1) {
   }
 }
 
+// Cargar datos faltantes de clientes y plazos
+async function loadMissingData(solicitudesData) {
+  const clientesIds = new Set();
+  const plazosIds = new Set();
+  
+  // Recopilar IDs únicos
+  solicitudesData.forEach(solicitud => {
+    const clienteId = solicitud.clienteID || solicitud.clienteId;
+    const plazoId = solicitud.plazoID || solicitud.plazoId;
+    
+    if (clienteId && !clientesCache.value[clienteId]) {
+      clientesIds.add(clienteId);
+    }
+    
+    if (plazoId && !plazosCache.value[plazoId]) {
+      plazosIds.add(plazoId);
+    }
+  });
+  
+  // Cargar clientes faltantes en paralelo
+  const clientesPromises = Array.from(clientesIds).map(id => loadClienteById(id));
+  const plazosPromises = Array.from(plazosIds).map(id => loadPlazoById(id));
+  
+  await Promise.all([...clientesPromises, ...plazosPromises]);
+}
+
+// --- Métodos de Utilidad para obtener IDs ---
+function getSolicitudId(solicitud) {
+  // Intentar diferentes posibles ubicaciones del ID
+  const id = solicitud.solicitudID;
+  
+  // Log para debuggear (puedes removerlo después)
+  if (!id && solicitud) {
+    console.warn('No se encontró ID en la solicitud. Estructura:', Object.keys(solicitud));
+  }
+  
+  return id;
+}
+
+function getPrestamoId(solicitud) {
+  // Intentar diferentes posibles ubicaciones del ID del préstamo
+  // Si la solicitud está aprobada, el préstamo puede tener su propio ID
+  return solicitud.prestamo?.prestamoID ||
+         solicitud.prestamo?.prestamoId ||
+         solicitud.prestamo?.id ||
+         solicitud.prestamoID ||
+         solicitud.prestamoId ||
+         // Si no hay préstamo separado, usar el ID de la solicitud (asumiendo que es el mismo)
+         getSolicitudId(solicitud);
+}
+
+function isEnProceso(solicitud) {
+  const estado = (solicitud.estadoSolicitud?.nombreEstado || solicitud.estado || '').toUpperCase();
+  return estado === 'EN PROCESO';
+}
+
+function isSolicitudAprobada(solicitud) {
+  const estado = (solicitud.estadoSolicitud?.nombreEstado || solicitud.estado || '').toUpperCase();
+  return estado === 'APROBADO' || estado === 'APROBADA';
+}
+
 // --- Métodos del Modal ---
 function openModal(id, action) {
+    if (!id) {
+        console.error('ID de solicitud no válido:', id);
+        showMessage('Error: No se pudo obtener el ID de la solicitud.', 'error');
+        return;
+    }
+    
     selectedSolicitudId.value = id;
     modalAction.value = action;
     gestionDetalles.value = ''; // Limpiar detalles anteriores
@@ -174,7 +276,15 @@ async function submitGestion() {
 
     try {
         const id = selectedSolicitudId.value;
+        
+        if (!id) {
+            showMessage('Error: No se pudo obtener el ID de la solicitud.', 'error');
+            console.error('ID de solicitud no válido:', id);
+            return;
+        }
+        
         const data = { detalles: gestionDetalles.value.trim() };
+        
         
         if (modalAction.value === 'APROBAR') {
             // Llama a PUT /api/solicitudes/prestamo-id/{id}/aprobar
@@ -189,11 +299,13 @@ async function submitGestion() {
         closeModal();
         // Recargar la lista para ver el estado actualizado
         // Si la página actual queda vacía, recarga la página anterior (máx 1)
-        if (solicitudes.value.length === 1 && page.value > 1) {
-            loadSolicitudes(page.value - 1);
-        } else {
-            loadSolicitudes(page.value);
-        }
+        setTimeout(() => {
+            if (solicitudes.value.length === 1 && page.value > 1) {
+                loadSolicitudes(page.value - 1);
+            } else {
+                loadSolicitudes(page.value);
+            }
+        }, 500);
 
     } catch (error) {
         console.error("Error al gestionar solicitud:", error.response || error);
@@ -222,8 +334,129 @@ function showMessage(msg, type) {
     setTimeout(() => { message.value = ''; }, 5000);
 }
 
+// --- Cargar datos de referencia (Clientes y Plazos) ---
+async function loadClientes() {
+  if (isLoadingClientes.value || Object.keys(clientesCache.value).length > 0) return;
+  
+  isLoadingClientes.value = true;
+  try {
+    // Cargar todos los clientes (usando un tamaño grande)
+    const response = await ClienteService.getAllClientes(1, 1000);
+    const clientes = response.data.content || [];
+    
+    // Crear un mapa de ID -> nombre completo
+    clientes.forEach(cliente => {
+      const id = cliente.clienteID || cliente.id;
+      clientesCache.value[id] = {
+        nombre: cliente.nombre || '',
+        apellido: cliente.apellido || ''
+      };
+    });
+  } catch (error) {
+    console.error("Error al cargar clientes:", error);
+  } finally {
+    isLoadingClientes.value = false;
+  }
+}
+
+async function loadPlazos() {
+  if (isLoadingPlazos.value || Object.keys(plazosCache.value).length > 0) return;
+  
+  isLoadingPlazos.value = true;
+  try {
+    const response = await PlazoService.getAllPlazos();
+    const plazos = Array.isArray(response.data) ? response.data : (response.data.content || response.data || []);
+    
+    // Crear un mapa de ID -> información del plazo
+    plazos.forEach(plazo => {
+      const id = plazo.plazoID || plazo.id;
+      plazosCache.value[id] = {
+        meses: plazo.duracionMeses || plazo.duracion || plazo.meses || plazo.plazoID || plazo.id,
+        tasaInteres: plazo.tasaInteres || plazo.tasa || plazo.interes || 0
+      };
+    });
+  } catch (error) {
+    console.error("Error al cargar plazos:", error);
+  } finally {
+    isLoadingPlazos.value = false;
+  }
+}
+
+// --- Métodos de Utilidad para obtener información ---
+function getClienteNombre(clienteId) {
+  if (!clienteId) return 'N/A';
+  
+  const cliente = clientesCache.value[clienteId];
+  if (cliente) {
+    return `${cliente.nombre} ${cliente.apellido}`.trim() || `Cliente ID: ${clienteId}`;
+  }
+  
+  // Si no está en cache, intentar cargarlo
+  if (!isLoadingClientes.value) {
+    loadClienteById(clienteId);
+  }
+  
+  return `Cliente ID: ${clienteId}`;
+}
+
+async function loadClienteById(id) {
+  try {
+    const response = await ClienteService.getClienteById(id);
+    const cliente = response.data;
+    clientesCache.value[id] = {
+      nombre: cliente.nombre || '',
+      apellido: cliente.apellido || ''
+    };
+  } catch (error) {
+    console.error(`Error al cargar cliente ${id}:`, error);
+  }
+}
+
+function getPlazoMeses(plazoId) {
+  if (!plazoId) return 'N/A';
+  
+  const plazo = plazosCache.value[plazoId];
+  if (plazo) {
+    return `${plazo.meses} meses`;
+  }
+  
+  // Si no está en cache, intentar cargarlo
+  if (!isLoadingPlazos.value) {
+    loadPlazoById(plazoId);
+  }
+  
+  return `Plazo ID: ${plazoId}`;
+}
+
+async function loadPlazoById(id) {
+  try {
+    const response = await PlazoService.getPlazoById(id);
+    const plazo = response.data;
+    plazosCache.value[id] = {
+      meses: plazo.duracionMeses || plazo.duracion || plazo.meses || plazo.plazoID || plazo.id,
+      tasaInteres: plazo.tasaInteres || plazo.tasa || plazo.interes || 0
+    };
+  } catch (error) {
+    console.error(`Error al cargar plazo ${id}:`, error);
+  }
+}
+
+function getTasaInteres(plazoId) {
+  if (!plazoId) return 'N/A';
+  
+  const plazo = plazosCache.value[plazoId];
+  if (plazo && plazo.tasaInteres) {
+    return `${plazo.tasaInteres}%`;
+  }
+  
+  return 'N/A';
+}
+
 // --- Ciclo de Vida ---
-onMounted(() => {
+onMounted(async () => {
+  // Cargar datos de referencia primero
+  await Promise.all([loadClientes(), loadPlazos()]);
+  // Luego cargar las solicitudes
   loadSolicitudes();
 });
 </script>
@@ -239,8 +472,15 @@ h2 {
     margin-bottom: 20px;
 }
 
-.create-btn {
+.action-buttons-header {
+    display: flex;
+    gap: 10px;
     margin-bottom: 20px;
+    flex-wrap: wrap;
+}
+
+.create-btn {
+    margin-bottom: 0;
 }
 
 .table {
@@ -265,6 +505,24 @@ h2 {
 .action-buttons {
     display: flex;
     gap: 8px;
+}
+
+.pagos-buttons {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    justify-content: center;
+}
+
+.no-prestamo {
+    color: #999;
+    font-style: italic;
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    pointer-events: none;
 }
 
 .btn {

@@ -13,26 +13,26 @@ export default {
     },
 
     /**
-     * GET /api/prestamos/{id} - Obtiene un préstamo específico.
+     * GET /api/prestamo-id/{id} - Obtiene un préstamo específico.
      */
     getPrestamoById(id) {
-        return api.get(`${API_PATH}/${id}`);
+        return api.get(`${API_PATH}/prestamo-id/${id}`);
     },
 
     /**
-     * GET /api/prestamos/{id}/pagos - Obtiene los pagos de un préstamo.
+     * GET /api/prestamo-id/{id}/pagos - Obtiene los pagos de un préstamo.
      */
     getPagosByPrestamo(id) {
-        return api.get(`${API_PATH}/${id}/pagos`);
+        return api.get(`${API_PATH}/prestamo-id/${id}/pagos`);
     },
 
     /**
-     * POST /api/prestamos/{id}/pagos - Registra un nuevo pago para un préstamo.
+     * POST /api/prestamo-id/{id}/pagos - Registra un nuevo pago para un préstamo.
      * @param {Number} id - ID del préstamo
      * @param {Object} data - { montoPago, fechaPago }
      */
     createPago(id, data) {
-        return api.post(`${API_PATH}/${id}/pagos`, data);
+        return api.post(`${API_PATH}/prestamo-id/${id}/pagos`, data);
     }
 };
 

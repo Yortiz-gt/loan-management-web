@@ -9,7 +9,7 @@
         <thead>
           <tr>
             <th>ID</th>
-            <th>Cliente ID</th>
+            <th>Cliente</th>
             <th>Monto Total</th>
             <th>Monto Pagado</th>
             <th>Saldo Pendiente</th>
@@ -22,7 +22,7 @@
         <tbody>
           <tr v-for="prestamo in prestamos" :key="prestamo.prestamoID || prestamo.id">
             <td>{{ prestamo.prestamoID || prestamo.id }}</td>
-            <td>{{ prestamo.clienteID || prestamo.clienteId }}</td>
+            <td>{{ getClienteNombre(prestamo.cliente?.clienteID || prestamo.cliente?.id || prestamo.clienteID || prestamo.clienteId) }}</td>
             <td>${{ formatCurrency(prestamo.montoTotal) }}</td>
             <td>${{ formatCurrency(prestamo.montoPagado || 0) }}</td>
             <td>${{ formatCurrency(calculateSaldo(prestamo)) }}</td>
@@ -71,6 +71,7 @@
 <script setup>
 import { ref, onMounted } from 'vue';
 import PrestamoService from '@/services/PrestamoService';
+import ClienteService from '@/services/ClienteService';
 
 // --- Variables Reactivas ---
 const prestamos = ref([]);
@@ -81,6 +82,10 @@ const isLoading = ref(false);
 
 const message = ref('');
 const messageType = ref('');
+
+// Cache de clientes para evitar múltiples llamadas
+const clientesCache = ref({});
+const isLoadingClientes = ref(false);
 
 // --- Métodos de Listado y Paginación ---
 async function loadPrestamos(newPage = 1) {
@@ -113,6 +118,9 @@ async function loadPrestamos(newPage = 1) {
       prestamos.value = [];
       totalPages.value = 1;
     }
+    
+    // Cargar datos faltantes de clientes
+    await loadMissingClientes(prestamos.value);
 
   } catch (error) {
     console.error("Error al cargar préstamos:", error);
@@ -176,8 +184,84 @@ function showMessage(msg, type) {
     setTimeout(() => { message.value = ''; }, 5000);
 }
 
+// --- Cargar datos de referencia (Clientes) ---
+async function loadClientes() {
+  if (isLoadingClientes.value || Object.keys(clientesCache.value).length > 0) return;
+  
+  isLoadingClientes.value = true;
+  try {
+    // Cargar todos los clientes (usando un tamaño grande)
+    const response = await ClienteService.getAllClientes(1, 1000);
+    const clientes = response.data.content || [];
+    
+    // Crear un mapa de ID -> nombre completo
+    clientes.forEach(cliente => {
+      const id = cliente.clienteID || cliente.id;
+      clientesCache.value[id] = {
+        nombre: cliente.nombre || '',
+        apellido: cliente.apellido || ''
+      };
+    });
+  } catch (error) {
+    console.error("Error al cargar clientes:", error);
+  } finally {
+    isLoadingClientes.value = false;
+  }
+}
+
+// Cargar clientes faltantes
+async function loadMissingClientes(prestamosData) {
+  const clientesIds = new Set();
+  
+  // Recopilar IDs únicos de clientes
+  prestamosData.forEach(prestamo => {
+    const clienteId = prestamo.cliente?.clienteID || prestamo.cliente?.id || prestamo.clienteID || prestamo.clienteId;
+    
+    if (clienteId && !clientesCache.value[clienteId]) {
+      clientesIds.add(clienteId);
+    }
+  });
+  
+  // Cargar clientes faltantes en paralelo
+  const clientesPromises = Array.from(clientesIds).map(id => loadClienteById(id));
+  await Promise.all(clientesPromises);
+}
+
+async function loadClienteById(id) {
+  try {
+    const response = await ClienteService.getClienteById(id);
+    const cliente = response.data;
+    clientesCache.value[id] = {
+      nombre: cliente.nombre || '',
+      apellido: cliente.apellido || ''
+    };
+  } catch (error) {
+    console.error(`Error al cargar cliente ${id}:`, error);
+  }
+}
+
+// --- Métodos de Utilidad para obtener información del cliente ---
+function getClienteNombre(clienteId) {
+  if (!clienteId) return 'N/A';
+  
+  const cliente = clientesCache.value[clienteId];
+  if (cliente) {
+    return `${cliente.nombre} ${cliente.apellido}`.trim() || `Cliente ID: ${clienteId}`;
+  }
+  
+  // Si no está en cache, intentar cargarlo
+  if (!isLoadingClientes.value) {
+    loadClienteById(clienteId);
+  }
+  
+  return `Cliente ID: ${clienteId}`;
+}
+
 // --- Ciclo de Vida: Carga Inicial ---
-onMounted(() => {
+onMounted(async () => {
+  // Cargar datos de referencia primero
+  await loadClientes();
+  // Luego cargar los préstamos
   loadPrestamos();
 });
 </script>
