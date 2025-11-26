@@ -10,8 +10,7 @@
           <tr>
             <th>ID</th>
             <th>Cliente</th>
-            <th>Monto Total</th>
-            <th>Monto Pagado</th>
+            <th>Monto Prestamo</th>
             <th>Saldo Pendiente</th>
             <th>Plazo</th>
             <th>Fecha Aprobación</th>
@@ -23,15 +22,14 @@
           <tr v-for="prestamo in prestamos" :key="prestamo.prestamoID || prestamo.id">
             <td>{{ prestamo.prestamoID || prestamo.id }}</td>
             <td>{{ getClienteNombre(prestamo.cliente?.clienteID || prestamo.cliente?.id || prestamo.clienteID || prestamo.clienteId) }}</td>
-            <td>${{ formatCurrency(prestamo.montoTotal) }}</td>
-            <td>${{ formatCurrency(prestamo.montoPagado || 0) }}</td>
             <td>${{ formatCurrency(calculateSaldo(prestamo)) }}</td>
-            <td>{{ prestamo.plazoID || prestamo.plazoId || 'N/A' }} meses</td>
+            <td>${{ formatCurrency(prestamo.montoPendiente) }}</td>
+            <td>{{ getPlazoMeses(prestamo.solicitud.tipoPlazo?.plazoID || prestamo.tipoPlazo?.plazoId || prestamo.plazoID || prestamo.plazoId) }}</td>
             <td>{{ formatDate(prestamo.fechaAprobacion) }}</td>
             <td><span :class="['status', getEstadoClass(prestamo)]">{{ getEstado(prestamo) }}</span></td>
             <td class="action-buttons">
-              <router-link 
-                :to="{ name: 'pago-create', params: { id: prestamo.prestamoID || prestamo.id } }" 
+              <router-link
+                :to="{ name: 'pago-create', params: { id: prestamo.prestamoID || prestamo.id } }"
                 class="btn btn-sm btn-primary"
                 v-if="calculateSaldo(prestamo) > 0">
                 Registrar Pago
@@ -41,18 +39,18 @@
           </tr>
         </tbody>
       </table>
-      
+
       <div class="pagination-controls">
-        <button 
-          @click="loadPrestamos(page - 1)" 
-          :disabled="page <= 1" 
+        <button
+          @click="loadPrestamos(page - 1)"
+          :disabled="page <= 1"
           class="btn btn-secondary">
           Anterior
         </button>
         <span>Página {{ page }} de {{ totalPages }}</span>
-        <button 
-          @click="loadPrestamos(page + 1)" 
-          :disabled="page >= totalPages" 
+        <button
+          @click="loadPrestamos(page + 1)"
+          :disabled="page >= totalPages"
           class="btn btn-secondary">
           Siguiente
         </button>
@@ -72,6 +70,7 @@
 import { ref, onMounted } from 'vue';
 import PrestamoService from '@/services/PrestamoService';
 import ClienteService from '@/services/ClienteService';
+import PlazoService from '@/services/PlazoService';
 
 // --- Variables Reactivas ---
 const prestamos = ref([]);
@@ -83,9 +82,11 @@ const isLoading = ref(false);
 const message = ref('');
 const messageType = ref('');
 
-// Cache de clientes para evitar múltiples llamadas
+// Cache de clientes y plazos para evitar múltiples llamadas
 const clientesCache = ref({});
+const plazosCache = ref({});
 const isLoadingClientes = ref(false);
+const isLoadingPlazos = ref(false);
 
 // --- Métodos de Listado y Paginación ---
 async function loadPrestamos(newPage = 1) {
@@ -96,14 +97,14 @@ async function loadPrestamos(newPage = 1) {
   try {
     // Llama al endpoint GET /api/prestamos?page={page}&size={size}
     const response = await PrestamoService.getAllPrestamos(page.value, size.value);
-    
+
     // Manejar diferentes estructuras de respuesta
     if (response && response.data) {
       // Si la respuesta tiene estructura de paginación (Spring Data)
       if (response.data.content) {
         prestamos.value = response.data.content || [];
         totalPages.value = response.data.totalPages || 1;
-      } 
+      }
       // Si la respuesta es un array directo
       else if (Array.isArray(response.data)) {
         prestamos.value = response.data;
@@ -118,18 +119,18 @@ async function loadPrestamos(newPage = 1) {
       prestamos.value = [];
       totalPages.value = 1;
     }
-    
-    // Cargar datos faltantes de clientes
-    await loadMissingClientes(prestamos.value);
+
+    // Cargar datos faltantes de clientes y plazos
+    await loadMissingData(prestamos.value);
 
   } catch (error) {
     console.error("Error al cargar préstamos:", error);
     console.error("Detalles del error:", error.response || error.message);
-    
+
     // Asegurar que siempre se muestre el estado correcto
     prestamos.value = [];
     totalPages.value = 1;
-    
+
     // Mostrar mensaje de error más específico
     let errorMessage = 'Error al cargar la lista de préstamos.';
     if (error.response) {
@@ -160,9 +161,12 @@ function formatDate(dateString) {
 }
 
 function calculateSaldo(prestamo) {
-  const montoTotal = parseFloat(prestamo.montoTotal || 0);
-  const montoPagado = parseFloat(prestamo.montoPagado || 0);
-  return Math.max(0, montoTotal - montoPagado);
+  const montoPricipal = parseFloat(prestamo.montoPrincipal || 0);
+  const tasaInteres= parseFloat(prestamo.tasaInteres);
+  const plazo         = prestamo.plazoMeses;
+  prestamo.montoPrincipal + (prestamo.montoPrincipal * prestamo.plazoMeses * prestamo.tasaInteres)
+  console.log( montoPricipal +  (montoPricipal*plazo*tasaInteres));
+  return Math.max(0, montoPricipal +  (montoPricipal*plazo*tasaInteres));
 }
 
 function getEstado(prestamo) {
@@ -187,13 +191,13 @@ function showMessage(msg, type) {
 // --- Cargar datos de referencia (Clientes) ---
 async function loadClientes() {
   if (isLoadingClientes.value || Object.keys(clientesCache.value).length > 0) return;
-  
+
   isLoadingClientes.value = true;
   try {
     // Cargar todos los clientes (usando un tamaño grande)
     const response = await ClienteService.getAllClientes(1, 1000);
     const clientes = response.data.content || [];
-    
+
     // Crear un mapa de ID -> nombre completo
     clientes.forEach(cliente => {
       const id = cliente.clienteID || cliente.id;
@@ -209,22 +213,29 @@ async function loadClientes() {
   }
 }
 
-// Cargar clientes faltantes
-async function loadMissingClientes(prestamosData) {
+// Cargar datos faltantes de clientes y plazos
+async function loadMissingData(prestamosData) {
   const clientesIds = new Set();
-  
-  // Recopilar IDs únicos de clientes
+  const plazosIds = new Set();
+
+  // Recopilar IDs únicos
   prestamosData.forEach(prestamo => {
     const clienteId = prestamo.cliente?.clienteID || prestamo.cliente?.id || prestamo.clienteID || prestamo.clienteId;
-    
+    const plazoId = prestamo.tipoPlazo?.plazoID || prestamo.tipoPlazo?.plazoId || prestamo.plazoID || prestamo.plazoId;
+
     if (clienteId && !clientesCache.value[clienteId]) {
       clientesIds.add(clienteId);
     }
+
+    if (plazoId && !plazosCache.value[plazoId]) {
+      plazosIds.add(plazoId);
+    }
   });
-  
-  // Cargar clientes faltantes en paralelo
+
+  // Cargar datos faltantes en paralelo
   const clientesPromises = Array.from(clientesIds).map(id => loadClienteById(id));
-  await Promise.all(clientesPromises);
+  const plazosPromises = Array.from(plazosIds).map(id => loadPlazoById(id));
+  await Promise.all([...clientesPromises, ...plazosPromises]);
 }
 
 async function loadClienteById(id) {
@@ -240,27 +251,83 @@ async function loadClienteById(id) {
   }
 }
 
+// --- Cargar datos de referencia (Plazos) ---
+async function loadPlazos() {
+  if (isLoadingPlazos.value || Object.keys(plazosCache.value).length > 0) return;
+
+  isLoadingPlazos.value = true;
+  try {
+    const response = await PlazoService.getAllPlazos();
+
+    const plazos = Array.isArray(response.data) ? response.data : (response.data.content || response.data || []);
+
+    // Crear un mapa de ID -> información del plazo
+    plazos.forEach(plazo => {
+      const id = plazo.plazoID || plazo.id;
+      plazosCache.value[id] = {
+        meses: plazo.meses || plazo.duracion || plazo.meses || plazo.plazoID || plazo.id,
+        tasaInteres: plazo.tasaInteres || plazo.tasa || plazo.interes || 0
+      };
+    });
+  } catch (error) {
+    console.error("Error al cargar plazos:", error);
+  } finally {
+    isLoadingPlazos.value = false;
+  }
+}
+
+async function loadPlazoById(id) {
+  try {
+    const response = await PlazoService.getPlazoById(id);
+    const plazo = response.data;
+    plazosCache.value[id] = {
+      meses: plazo.duracionMeses || plazo.duracion || plazo.meses || plazo.plazoID || plazo.id,
+      tasaInteres: plazo.tasaInteres || plazo.tasa || plazo.interes || 0
+    };
+  } catch (error) {
+    console.error(`Error al cargar plazo ${id}:`, error);
+  }
+}
+
 // --- Métodos de Utilidad para obtener información del cliente ---
 function getClienteNombre(clienteId) {
   if (!clienteId) return 'N/A';
-  
+
   const cliente = clientesCache.value[clienteId];
   if (cliente) {
     return `${cliente.nombre} ${cliente.apellido}`.trim() || `Cliente ID: ${clienteId}`;
   }
-  
+
   // Si no está en cache, intentar cargarlo
   if (!isLoadingClientes.value) {
     loadClienteById(clienteId);
   }
-  
+
   return `Cliente ID: ${clienteId}`;
+}
+
+// --- Métodos de Utilidad para obtener información del plazo ---
+function getPlazoMeses(plazoId) {
+  console.log(plazoId);
+  if (!plazoId) return 'N/A';
+
+  const plazo = plazosCache.value[plazoId];
+  if (plazo) {
+    return `${plazo.meses} meses`;
+  }
+
+  // Si no está en cache, intentar cargarlo
+  if (!isLoadingPlazos.value) {
+    loadPlazoById(plazoId);
+  }
+
+  return `Plazo ID: ${plazoId}`;
 }
 
 // --- Ciclo de Vida: Carga Inicial ---
 onMounted(async () => {
   // Cargar datos de referencia primero
-  await loadClientes();
+  await Promise.all([loadClientes(), loadPlazos()]);
   // Luego cargar los préstamos
   loadPrestamos();
 });
